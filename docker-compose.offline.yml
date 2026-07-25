@@ -1,0 +1,3 @@
+services:
+  router:
+    pull_policy: never

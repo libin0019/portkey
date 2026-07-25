@@ -1,0 +1,6 @@
+services:
+  router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never

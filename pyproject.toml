@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wecom-feishu-router"
+version = "0.2.0"
+description = "A WeCom group bot compatible webhook router for Feishu"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "python-multipart>=0.0.18,<1",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.3,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wecom_feishu_router"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

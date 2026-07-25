@@ -1,0 +1,11 @@
+.env
+.venv/
+.coverage
+.DS_Store
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+config.toml
+data/
+dist/

@@ -1,0 +1,28 @@
+[server]
+request_timeout_seconds = 15
+
+[storage]
+sqlite_path = "./data/router.db"
+media_ttl_seconds = 259200
+
+[limits]
+max_image_bytes = 10485760
+max_file_bytes = 20971520
+max_request_bytes = 25165824
+max_concurrent_media_operations = 4
+
+[feishu_app]
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+
+[routes.ops_alert]
+webhook_url = "${FEISHU_OPS_WEBHOOK_URL}"
+webhook_secret = "${FEISHU_OPS_WEBHOOK_SECRET}"
+chat_id = "${FEISHU_OPS_CHAT_ID}"
+
+[routes.ops_alert.mention_map]
+zhangsan = "ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+[routes.finance]
+webhook_url = "${FEISHU_FINANCE_WEBHOOK_URL}"
+chat_id = "${FEISHU_FINANCE_CHAT_ID}"
