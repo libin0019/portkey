@@ -104,16 +104,12 @@ def test_load_single_route_from_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ROUTER_WEBHOOK_KEY", "route-secret")
-    monkeypatch.setenv(
-        "FEISHU_WEBHOOK_URL", "https://open.feishu.test/bot/hook"
-    )
+    monkeypatch.setenv("FEISHU_WEBHOOK_URL", "https://open.feishu.test/bot/hook")
     monkeypatch.setenv("FEISHU_WEBHOOK_SECRET", "signature-secret")
     monkeypatch.setenv("FEISHU_CHAT_ID", "oc_test")
     monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
     monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
-    monkeypatch.setenv(
-        "ROUTER_MENTION_MAP_JSON", '{"zhangsan":"ou_zhangsan"}'
-    )
+    monkeypatch.setenv("ROUTER_MENTION_MAP_JSON", '{"zhangsan":"ou_zhangsan"}')
 
     result = load_settings_from_env()
 
@@ -167,9 +163,7 @@ def test_environment_rejects_partial_app_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ROUTER_WEBHOOK_KEY", "route-secret")
-    monkeypatch.setenv(
-        "FEISHU_WEBHOOK_URL", "https://open.feishu.test/bot/hook"
-    )
+    monkeypatch.setenv("FEISHU_WEBHOOK_URL", "https://open.feishu.test/bot/hook")
     monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
 
     with pytest.raises(ConfigError, match="必须同时配置"):
@@ -192,10 +186,89 @@ def test_environment_rejects_invalid_values(
 ) -> None:
     if name != "ROUTER_ROUTES_JSON":
         monkeypatch.setenv("ROUTER_WEBHOOK_KEY", "route-secret")
-        monkeypatch.setenv(
-            "FEISHU_WEBHOOK_URL", "https://open.feishu.test/bot/hook"
-        )
+        monkeypatch.setenv("FEISHU_WEBHOOK_URL", "https://open.feishu.test/bot/hook")
     monkeypatch.setenv(name, value)
 
     with pytest.raises(ConfigError, match=message):
         load_settings_from_env()
+
+
+def test_load_dynamic_webhook_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DYNAMIC_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("DYNAMIC_WEBHOOK_SECRET", "shared-secret")
+    monkeypatch.setenv("DYNAMIC_MENTION_MAP_JSON", '{"zhangsan":"ou_zhangsan"}')
+
+    result = load_settings_from_env()
+
+    assert result.routes == {}
+    assert result.dynamic_webhook is not None
+    assert (
+        result.dynamic_webhook.base_url
+        == "https://open.feishu.cn/open-apis/bot/v2/hook"
+    )
+    assert result.dynamic_webhook.webhook_secret == "shared-secret"
+    assert result.dynamic_webhook.mention_map == {"zhangsan": "ou_zhangsan"}
+
+
+def test_dynamic_webhook_can_coexist_with_static_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DYNAMIC_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("ROUTER_WEBHOOK_KEY", "static-route")
+    monkeypatch.setenv("FEISHU_WEBHOOK_URL", "https://open.feishu.test/static")
+
+    result = load_settings_from_env()
+
+    assert set(result.routes) == {"static-route"}
+    assert result.dynamic_webhook is not None
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("DYNAMIC_WEBHOOK_ENABLED", "invalid", "必须是 true 或 false"),
+        (
+            "FEISHU_WEBHOOK_BASE_URL",
+            "https://attacker.example/open-apis/bot/v2/hook",
+            "必须是飞书或 Lark 官方",
+        ),
+        (
+            "FEISHU_WEBHOOK_BASE_URL",
+            "https://open.feishu.cn/open-apis/bot/v1/hook",
+            "必须是飞书或 Lark 官方",
+        ),
+    ],
+)
+def test_dynamic_webhook_rejects_unsafe_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+    message: str,
+) -> None:
+    monkeypatch.setenv("DYNAMIC_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ConfigError, match=message):
+        load_settings_from_env()
+
+
+def test_toml_allows_dynamic_webhook_without_static_routes(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[dynamic_webhook]
+enabled = true
+base_url = "https://open.larksuite.com/open-apis/bot/v2/hook"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = load_settings(config)
+
+    assert result.routes == {}
+    assert result.dynamic_webhook is not None
+    assert result.dynamic_webhook.base_url.startswith("https://open.larksuite.com/")

@@ -36,7 +36,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=0.2.0,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=0.3.0,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
             type=sha
 
@@ -48,4 +48,4 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
-          build-args: APP_VERSION=0.2.0
+          build-args: APP_VERSION=0.3.0

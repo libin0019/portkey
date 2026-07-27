@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, File, Query, Request, UploadFile
@@ -13,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import (
+    DynamicWebhookConfig,
     RouteConfig,
     Settings,
     load_settings,
@@ -24,6 +27,7 @@ from .store import MediaStore
 from .translator import decode_image, text_payload
 
 logger = logging.getLogger("wecom_feishu_router")
+_WEBHOOK_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,128}\Z")
 
 
 def create_app(
@@ -48,7 +52,7 @@ def create_app(
 
     app = FastAPI(
         title="WeCom → Feishu Router",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 
@@ -132,7 +136,7 @@ def create_app(
         return await _upload(route_key, media_type, media)
 
     async def _send(request: Request, route_key: str) -> dict[str, Any]:
-        route = _route(settings, route_key)
+        route_identity, route = _resolve_route(settings, route_key)
         try:
             payload = await request.json()
         except ValueError as error:
@@ -154,10 +158,8 @@ def create_app(
             if not isinstance(file_body, dict) or not file_body.get("media_id"):
                 raise RouterError("缺少 file.media_id")
             if not route.chat_id:
-                raise RouterError(
-                    f"路由 {route_key!r} 的文件消息需要配置 chat_id", 45003
-                )
-            media = media_store.get(route_key, str(file_body["media_id"]))
+                raise RouterError("当前路由的文件消息需要配置 chat_id", 45003)
+            media = media_store.get(route_identity, str(file_body["media_id"]))
             if media is None:
                 raise RouterError(
                     "media_id 不存在或已过期；请先通过本路由上传文件", 40007
@@ -170,9 +172,11 @@ def create_app(
     async def _upload(
         route_key: str, media_type: str, upload: UploadFile
     ) -> dict[str, Any]:
-        _route(settings, route_key)
+        route_identity, route = _resolve_route(settings, route_key)
         if media_type != "file":
             raise RouterError("upload_media 目前仅支持 type=file")
+        if not route.chat_id:
+            raise RouterError("当前路由的文件消息需要配置 chat_id", 45003)
         file_name = (
             ((upload.filename or "attachment").rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
             or "attachment"
@@ -184,7 +188,7 @@ def create_app(
             if file_size == 0:
                 raise RouterError("上传文件为空")
             file_key = await feishu.upload_file(file_name, upload.file)
-        media_id = media_store.put(route_key, file_key, file_name)
+        media_id = media_store.put(route_identity, file_key, file_name)
         return {
             "errcode": 0,
             "errmsg": "ok",
@@ -202,17 +206,43 @@ def build_app() -> FastAPI:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     config_path = os.getenv("ROUTER_CONFIG")
-    settings = (
-        load_settings(config_path) if config_path else load_settings_from_env()
-    )
+    settings = load_settings(config_path) if config_path else load_settings_from_env()
     return create_app(settings)
 
 
-def _route(settings: Settings, route_key: str) -> RouteConfig:
+def _resolve_route(settings: Settings, route_key: str) -> tuple[str, RouteConfig]:
     route = settings.routes.get(route_key)
-    if route is None:
+    if route is not None:
+        return route_key, route
+    if settings.dynamic_webhook is None:
         raise RouterError("无效的 webhook key", 93000)
-    return route
+    webhook_id = _extract_webhook_id(route_key, settings.dynamic_webhook)
+    return webhook_id, RouteConfig(
+        webhook_url=f"{settings.dynamic_webhook.base_url}/{webhook_id}",
+        webhook_secret=settings.dynamic_webhook.webhook_secret,
+        mention_map=settings.dynamic_webhook.mention_map,
+    )
+
+
+def _extract_webhook_id(value: str, dynamic: DynamicWebhookConfig) -> str:
+    candidate = value.strip()
+    if "://" in candidate:
+        supplied = urlparse(candidate)
+        base = urlparse(dynamic.base_url)
+        path_prefix = f"{base.path}/"
+        if (
+            supplied.scheme != base.scheme
+            or supplied.netloc != base.netloc
+            or not supplied.path.startswith(path_prefix)
+            or supplied.params
+            or supplied.query
+            or supplied.fragment
+        ):
+            raise RouterError("无效的飞书 Webhook 地址", 93000)
+        candidate = supplied.path[len(path_prefix) :]
+    if not _WEBHOOK_ID_PATTERN.fullmatch(candidate):
+        raise RouterError("无效的飞书 Webhook 标识", 93000)
+    return candidate
 
 
 async def _measure_upload(upload: UploadFile, maximum: int) -> int:

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version="${1:-0.2.0}"
+version="${1:-0.3.0}"
 target_platform="${2:-linux/amd64}"
 image_repository="${IMAGE_REPOSITORY:-wecom-feishu-router}"
 image="${image_repository}:${version}"

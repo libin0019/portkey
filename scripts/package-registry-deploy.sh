@@ -2,11 +2,11 @@
 set -eu
 
 image="${1:-}"
-version="${VERSION:-0.2.0}"
+version="${VERSION:-0.3.0}"
 
 if [ -z "$image" ]; then
   echo "用法: $0 <已发布的镜像完整地址:标签>" >&2
-  echo "示例: $0 ghcr.io/example/wecom-feishu-router:0.2.0" >&2
+  echo "示例: $0 ghcr.io/example/wecom-feishu-router:0.3.0" >&2
   exit 2
 fi
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wecom-feishu-router"
-version = "0.2.0"
+version = "0.3.0"
 description = "A WeCom group bot compatible webhook router for Feishu"
 readme = "README.md"
 requires-python = ">=3.11"

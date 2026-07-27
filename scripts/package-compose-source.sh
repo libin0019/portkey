@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version="${1:-0.2.0}"
+version="${1:-0.3.0}"
 
 case "$version" in
   *[!A-Za-z0-9._-]* | "")

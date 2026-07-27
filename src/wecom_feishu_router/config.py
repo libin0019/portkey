@@ -32,8 +32,16 @@ class RouteConfig:
 
 
 @dataclass(frozen=True)
+class DynamicWebhookConfig:
+    base_url: str = "https://open.feishu.cn/open-apis/bot/v2/hook"
+    webhook_secret: str | None = None
+    mention_map: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Settings:
     routes: dict[str, RouteConfig]
+    dynamic_webhook: DynamicWebhookConfig | None = None
     feishu_app: FeishuAppConfig | None = None
     sqlite_path: Path = Path("./data/router.db")
     media_ttl_seconds: int = 259_200
@@ -74,18 +82,16 @@ def load_settings(path: str | Path) -> Settings:
 def load_settings_from_env() -> Settings:
     routes_json = os.getenv("ROUTER_ROUTES_JSON")
     route_key = os.getenv("ROUTER_WEBHOOK_KEY")
-    if routes_json and route_key:
-        raise ConfigError(
-            "ROUTER_ROUTES_JSON 与 ROUTER_WEBHOOK_KEY 不能同时配置"
-        )
+    webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
+    dynamic_enabled = _env_bool("DYNAMIC_WEBHOOK_ENABLED", False)
+    if routes_json and (route_key or webhook_url):
+        raise ConfigError("ROUTER_ROUTES_JSON 与单路由环境变量不能同时配置")
 
     if routes_json:
         routes = _json_object(routes_json, "ROUTER_ROUTES_JSON")
-    else:
+    elif route_key or webhook_url:
         route_key = _required_env("ROUTER_WEBHOOK_KEY")
-        route: dict[str, Any] = {
-            "webhook_url": _required_env("FEISHU_WEBHOOK_URL")
-        }
+        route: dict[str, Any] = {"webhook_url": _required_env("FEISHU_WEBHOOK_URL")}
         optional_route_values = {
             "webhook_secret": os.getenv("FEISHU_WEBHOOK_SECRET"),
             "chat_id": os.getenv("FEISHU_CHAT_ID"),
@@ -103,35 +109,49 @@ def load_settings_from_env() -> Settings:
                 mention_map_json, "ROUTER_MENTION_MAP_JSON"
             )
         routes = {route_key: route}
+    elif dynamic_enabled:
+        routes = {}
+    else:
+        raise ConfigError(
+            "未配置静态路由；如需从请求 key 拼接飞书 Webhook，"
+            "请设置 DYNAMIC_WEBHOOK_ENABLED=true"
+        )
 
     data: dict[str, Any] = {
         "routes": routes,
         "server": {
-            "request_timeout_seconds": _env_float(
-                "REQUEST_TIMEOUT_SECONDS", 15.0
-            )
+            "request_timeout_seconds": _env_float("REQUEST_TIMEOUT_SECONDS", 15.0)
         },
         "storage": {
             "sqlite_path": os.getenv("SQLITE_PATH", "/app/data/router.db"),
-            "media_ttl_seconds": _env_int(
-                "MEDIA_TTL_SECONDS", 259_200
-            ),
+            "media_ttl_seconds": _env_int("MEDIA_TTL_SECONDS", 259_200),
         },
         "limits": {
-            "max_image_bytes": _env_int(
-                "MAX_IMAGE_BYTES", 10 * 1024 * 1024
-            ),
-            "max_file_bytes": _env_int(
-                "MAX_FILE_BYTES", 20 * 1024 * 1024
-            ),
-            "max_request_bytes": _env_int(
-                "MAX_REQUEST_BYTES", 24 * 1024 * 1024
-            ),
+            "max_image_bytes": _env_int("MAX_IMAGE_BYTES", 10 * 1024 * 1024),
+            "max_file_bytes": _env_int("MAX_FILE_BYTES", 20 * 1024 * 1024),
+            "max_request_bytes": _env_int("MAX_REQUEST_BYTES", 24 * 1024 * 1024),
             "max_concurrent_media_operations": _env_int(
                 "MAX_CONCURRENT_MEDIA_OPERATIONS", 4
             ),
         },
     }
+    if dynamic_enabled:
+        dynamic_data: dict[str, Any] = {
+            "enabled": True,
+            "base_url": os.getenv(
+                "FEISHU_WEBHOOK_BASE_URL",
+                "https://open.feishu.cn/open-apis/bot/v2/hook",
+            ),
+        }
+        dynamic_secret = os.getenv("DYNAMIC_WEBHOOK_SECRET")
+        if dynamic_secret and dynamic_secret.strip():
+            dynamic_data["webhook_secret"] = dynamic_secret
+        dynamic_mention_map = os.getenv("DYNAMIC_MENTION_MAP_JSON")
+        if dynamic_mention_map:
+            dynamic_data["mention_map"] = _json_object(
+                dynamic_mention_map, "DYNAMIC_MENTION_MAP_JSON"
+            )
+        data["dynamic_webhook"] = dynamic_data
 
     app_id = os.getenv("FEISHU_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET")
@@ -152,9 +172,26 @@ def _settings_from_data(data: Any) -> Settings:
     if not isinstance(data, dict):
         raise ConfigError("配置文件根节点必须是 TOML 表")
 
+    dynamic_data = _table(data, "dynamic_webhook")
+    dynamic_webhook = None
+    if _boolean(dynamic_data, "enabled", False):
+        base_url = (
+            _optional_string(dynamic_data.get("base_url"), "dynamic_webhook.base_url")
+            or "https://open.feishu.cn/open-apis/bot/v2/hook"
+        ).rstrip("/")
+        _validate_dynamic_webhook_base(base_url)
+        dynamic_webhook = DynamicWebhookConfig(
+            base_url=base_url,
+            webhook_secret=_optional_string(
+                dynamic_data.get("webhook_secret"),
+                "dynamic_webhook.webhook_secret",
+            ),
+            mention_map=_mention_map(dynamic_data, "dynamic_webhook"),
+        )
+
     route_data = _table(data, "routes")
-    if not route_data:
-        raise ConfigError("至少需要配置一个 [routes.<key>]")
+    if not route_data and dynamic_webhook is None:
+        raise ConfigError("至少需要配置一个静态路由或启用 dynamic_webhook")
 
     routes: dict[str, RouteConfig] = {}
     for route_key, item in route_data.items():
@@ -164,16 +201,6 @@ def _settings_from_data(data: Any) -> Settings:
         _validate_http_url(webhook_url, f"routes.{route_key}.webhook_url")
         if not route_key.strip():
             raise ConfigError(f"路由 {route_key!r} 缺少 webhook_url")
-        mention_data = item.get("mention_map", {})
-        if not isinstance(mention_data, dict):
-            raise ConfigError(f"routes.{route_key}.mention_map 必须是 TOML 表")
-        mention_map: dict[str, str] = {}
-        for source, target in mention_data.items():
-            if not isinstance(target, str) or not target.strip():
-                raise ConfigError(
-                    f"routes.{route_key}.mention_map.{source} 必须是非空字符串"
-                )
-            mention_map[str(source)] = target.strip()
         routes[route_key] = RouteConfig(
             webhook_url=webhook_url,
             chat_id=_optional_string(
@@ -182,7 +209,7 @@ def _settings_from_data(data: Any) -> Settings:
             webhook_secret=_optional_string(
                 item.get("webhook_secret"), f"routes.{route_key}.webhook_secret"
             ),
-            mention_map=mention_map,
+            mention_map=_mention_map(item, f"routes.{route_key}"),
         )
 
     app_data = data.get("feishu_app")
@@ -229,6 +256,7 @@ def _settings_from_data(data: Any) -> Settings:
         )
     return Settings(
         routes=routes,
+        dynamic_webhook=dynamic_webhook,
         feishu_app=feishu_app,
         sqlite_path=Path(sqlite_path),
         media_ttl_seconds=_positive_int(
@@ -283,6 +311,18 @@ def _env_float(name: str, default: float) -> float:
         raise ConfigError(f"环境变量 {name} 必须是数字") from error
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigError(f"环境变量 {name} 必须是 true 或 false")
+
+
 def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
     value = data.get(key, {})
     if not isinstance(value, dict):
@@ -304,6 +344,25 @@ def _optional_string(value: Any, name: str) -> str | None:
         raise ConfigError(f"{name} 必须是字符串")
     result = value.strip()
     return result or None
+
+
+def _mention_map(data: dict[str, Any], section: str) -> dict[str, str]:
+    mention_data = data.get("mention_map", {})
+    if not isinstance(mention_data, dict):
+        raise ConfigError(f"{section}.mention_map 必须是 TOML 表")
+    mention_map: dict[str, str] = {}
+    for source, target in mention_data.items():
+        if not isinstance(target, str) or not target.strip():
+            raise ConfigError(f"{section}.mention_map.{source} 必须是非空字符串")
+        mention_map[str(source)] = target.strip()
+    return mention_map
+
+
+def _boolean(data: dict[str, Any], key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key} 必须是布尔值")
+    return value
 
 
 def _positive_int(
@@ -341,3 +400,20 @@ def _validate_http_url(value: str, name: str) -> None:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ConfigError(f"{name} 必须是有效的 HTTP(S) URL")
+
+
+def _validate_dynamic_webhook_base(value: str) -> None:
+    parsed = urlparse(value)
+    allowed_hosts = {"open.feishu.cn", "open.larksuite.com"}
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in allowed_hosts
+        or parsed.netloc != parsed.hostname
+        or parsed.path != "/open-apis/bot/v2/hook"
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ConfigError(
+            "dynamic_webhook.base_url 必须是飞书或 Lark 官方 V2 Webhook 基地址"
+        )

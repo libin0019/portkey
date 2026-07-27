@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from wecom_feishu_router.config import (
+    DynamicWebhookConfig,
     FeishuAppConfig,
     RouteConfig,
     Settings,
@@ -209,6 +210,148 @@ async def test_unknown_route_uses_wecom_error_shape(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()["errcode"] == 93000
+
+
+@pytest.mark.asyncio
+async def test_dynamic_route_builds_feishu_webhook_from_key(
+    tmp_path: Path,
+) -> None:
+    captured_url = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_url
+        captured_url = str(request.url)
+        return httpx.Response(200, json={"code": 0, "msg": "success"})
+
+    dynamic_settings = replace(
+        settings(tmp_path),
+        routes={},
+        dynamic_webhook=DynamicWebhookConfig(),
+    )
+    webhook_id = "f99fed8d-9b01-4dfe-ab56-123456789abc"
+    client, resources = await request_client(
+        tmp_path, handler, app_settings=dynamic_settings
+    )
+    try:
+        response = await client.post(
+            f"/cgi-bin/webhook/send?key={webhook_id}",
+            json={"msgtype": "text", "text": {"content": "dynamic"}},
+        )
+    finally:
+        await resources.aclose()
+
+    assert response.json() == {"errcode": 0, "errmsg": "ok"}
+    assert captured_url == (
+        "https://open.feishu.cn/open-apis/bot/v2/hook/"
+        "f99fed8d-9b01-4dfe-ab56-123456789abc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_route_extracts_id_from_full_feishu_webhook(
+    tmp_path: Path,
+) -> None:
+    captured_url = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_url
+        captured_url = str(request.url)
+        return httpx.Response(200, json={"code": 0, "msg": "success"})
+
+    dynamic_settings = replace(
+        settings(tmp_path),
+        routes={},
+        dynamic_webhook=DynamicWebhookConfig(),
+    )
+    webhook_id = "f99fed8d-9b01-4dfe-ab56-123456789abc"
+    full_webhook = f"https://open.feishu.cn/open-apis/bot/v2/hook/{webhook_id}"
+    client, resources = await request_client(
+        tmp_path, handler, app_settings=dynamic_settings
+    )
+    try:
+        response = await client.post(
+            "/cgi-bin/webhook/send",
+            params={"key": full_webhook},
+            json={"msgtype": "text", "text": {"content": "dynamic"}},
+        )
+    finally:
+        await resources.aclose()
+
+    assert response.json() == {"errcode": 0, "errmsg": "ok"}
+    assert captured_url.endswith(f"/bot/v2/hook/{webhook_id}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "webhook_value",
+    [
+        "too-short",
+        "../invalid-webhook-identifier",
+        (
+            "https://attacker.example/open-apis/bot/v2/hook/"
+            "f99fed8d-9b01-4dfe-ab56-123456789abc"
+        ),
+        (
+            "https://open.feishu.cn/open-apis/bot/v2/hook/"
+            "f99fed8d-9b01-4dfe-ab56-123456789abc/extra"
+        ),
+    ],
+)
+async def test_dynamic_route_rejects_invalid_webhook_values(
+    tmp_path: Path,
+    webhook_value: str,
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("downstream must not be called")
+
+    dynamic_settings = replace(
+        settings(tmp_path),
+        routes={},
+        dynamic_webhook=DynamicWebhookConfig(),
+    )
+    client, resources = await request_client(
+        tmp_path, handler, app_settings=dynamic_settings
+    )
+    try:
+        response = await client.post(
+            "/cgi-bin/webhook/send",
+            params={"key": webhook_value},
+            json={"msgtype": "text", "text": {"content": "blocked"}},
+        )
+    finally:
+        await resources.aclose()
+
+    assert response.json()["errcode"] == 93000
+
+
+@pytest.mark.asyncio
+async def test_dynamic_route_rejects_file_upload_without_chat_id(
+    tmp_path: Path,
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("downstream must not be called")
+
+    dynamic_settings = replace(
+        settings(tmp_path),
+        routes={},
+        dynamic_webhook=DynamicWebhookConfig(),
+    )
+    client, resources = await request_client(
+        tmp_path, handler, app_settings=dynamic_settings
+    )
+    try:
+        response = await client.post(
+            "/cgi-bin/webhook/upload_media"
+            "?key=f99fed8d-9b01-4dfe-ab56-123456789abc&type=file",
+            files={"media": ("report.pdf", b"content", "application/pdf")},
+        )
+    finally:
+        await resources.aclose()
+
+    assert response.json() == {
+        "errcode": 45003,
+        "errmsg": "当前路由的文件消息需要配置 chat_id",
+    }
 
 
 @pytest.mark.asyncio

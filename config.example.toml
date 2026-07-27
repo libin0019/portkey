@@ -11,18 +11,21 @@ max_file_bytes = 20971520
 max_request_bytes = 25165824
 max_concurrent_media_operations = 4
 
-[feishu_app]
-app_id = "${FEISHU_APP_ID}"
-app_secret = "${FEISHU_APP_SECRET}"
+[dynamic_webhook]
+enabled = true
+base_url = "https://open.feishu.cn/open-apis/bot/v2/hook"
+# webhook_secret = "${DYNAMIC_WEBHOOK_SECRET}"
 
-[routes.ops_alert]
-webhook_url = "${FEISHU_OPS_WEBHOOK_URL}"
-webhook_secret = "${FEISHU_OPS_WEBHOOK_SECRET}"
-chat_id = "${FEISHU_OPS_CHAT_ID}"
+# 图片或文件消息取消以下注释：
+# [feishu_app]
+# app_id = "${FEISHU_APP_ID}"
+# app_secret = "${FEISHU_APP_SECRET}"
 
-[routes.ops_alert.mention_map]
-zhangsan = "ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-
-[routes.finance]
-webhook_url = "${FEISHU_FINANCE_WEBHOOK_URL}"
-chat_id = "${FEISHU_FINANCE_CHAT_ID}"
+# 文件消息需要静态路由和 chat_id：
+# [routes.ops_alert]
+# webhook_url = "${FEISHU_OPS_WEBHOOK_URL}"
+# webhook_secret = "${FEISHU_OPS_WEBHOOK_SECRET}"
+# chat_id = "${FEISHU_OPS_CHAT_ID}"
+#
+# [routes.ops_alert.mention_map]
+# zhangsan = "ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
